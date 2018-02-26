@@ -1,0 +1,70 @@
+#!/bin/sh
+
+if [ ! -d "$GOPATH" ]; then
+  echo "\$GOPATH not found" >&2
+  exit 1
+fi
+
+SCRIPT=$(readlink -f "$0")
+SCRIPTPATH=$(dirname "$SCRIPT")
+. $SCRIPTPATH/gomeet-common
+
+SRCPATH=$GOPATH/src/$GOGS_NAME/$GOGS_ORG
+RLIST=$SCRIPTPATH/../gomeet-services
+
+if [ ! -d "$SRCPATH" ]; then
+  echo "\$SRCPATH not found it will be created" >&2
+  mkdir -p $SRCPATH
+fi
+
+if [ "$1" = "-a" ]; then
+  ONLY_SVC=0
+  CMD=$(echo "$@" | cut -d " " -f2-)
+else
+  ONLY_SVC=1
+  CMD="$@"
+fi
+
+
+echo "___________________________________________________________________________"
+cat $RLIST | while read line
+do
+  svc=$(echo $line | tr -s " ")
+  if startswith "$svc" "#" ; then
+    echo "Ignore comment: $svc"
+    continue
+  fi
+  s_name=$(echo "$svc" | cut -d " " -f1)
+  s_version=$(echo "$svc" | cut -d " " -f2)
+  [ "$s_version" = "$s_name" ] && s_version="master"
+
+  OK=1
+  if [ "$ONLY_SVC" = "1" ]; then
+    if startswith "$s_name" "$GOMEET_SVC_PREFIX"; then
+      OK=1
+    else
+      OK=0
+    fi
+  fi
+  if [ "$OK" = "1" ]; then
+    echo "Svc: $s_name"
+    echo "Cmd: $CMD"
+    cd $SRCPATH
+    if [ -d "$SRCPATH/$s_name" ]; then
+      cd $SRCPATH/$s_name
+      echo "Dir: $SRCPATH/$s_name - OK"
+      echo "Branch: $(git branch | grep "\*" | cut -d ' ' -f2)"
+      echo "---------------------------------------------------------------------------"
+      echo ""
+      eval "$CMD"
+    else
+      echo "Dir: $SRCPATH/$s_name not found"
+      echo "---------------------------------------------------------------------------"
+      echo ""
+      echo "Do:"
+      echo "    git clone $GOGS_GIT_SERVER/$GOGS_ORG/$s_name.git $SRCPATH/$s_name"
+    fi
+    echo ""
+    echo "___________________________________________________________________________"
+  fi
+done

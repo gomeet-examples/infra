@@ -1,0 +1,52 @@
+#!/bin/sh
+
+if [ ! -d "$GOPATH" ]; then
+  echo "\$GOPATH not found" >&2
+  exit 1
+fi
+
+SCRIPT=$(readlink -f "$0")
+SCRIPTPATH=$(dirname "$SCRIPT")
+. $SCRIPTPATH/gomeet-common
+
+SRCPATH=$GOPATH/src/$GOGS_NAME/$GOGS_ORG
+RLIST=$SCRIPTPATH/../gomeet-services
+
+if [ ! -d "$SRCPATH" ]; then
+  echo "\$SRCPATH not found it will be created" >&2
+  mkdir -p $SRCPATH
+fi
+
+
+cat $RLIST | while read line
+do
+  svc=$(echo $line | tr -s " ")
+  if startswith "$svc" "#" ; then
+    echo "Ignore comment: $svc"
+    continue
+  fi
+  s_name=$(echo "$svc" | cut -d " " -f1)
+  s_version=$(echo "$svc" | cut -d " " -f2)
+  [ "$s_version" = "$s_name" ] && s_version="master"
+
+  echo "Install $s_name service"
+  cd $SRCPATH
+  if [ -d "$SRCPATH/$s_name" ]; then
+    echo "$SRCPATH/$s_name exist so it will be updated"
+    cd $SRCPATH/$s_name
+    git pull --all
+  else
+    echo "$GOGS_GIT_SERVER/$GOGS_ORG/$s_name.git will be downloaded in $SRCPATH/$s_name"
+    time git clone $GOGS_GIT_SERVER/$GOGS_ORG/$s_name.git $s_name
+    cd $SRCPATH/$s_name
+    time git checkout develop
+    echo "Finish checkout develop"
+    time git remote update
+    echo "Finish remote update"
+    time git checkout master
+    echo "Finish checkout master"
+    time git flow init -d
+    echo "Finish flow init"
+  fi
+  echo ""
+done

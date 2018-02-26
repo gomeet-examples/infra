@@ -1,0 +1,4 @@
+infra
+svc-api-gateway          develop
+svc-echo                 develop
+svc-profile              develop

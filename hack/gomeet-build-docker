@@ -1,0 +1,200 @@
+#!/bin/sh
+
+FORCE_BRANCH=""
+if [ ! -z "$1" ]; then
+  case "$1" in
+    "master"|"develop")
+      FORCE_BRANCH="$1" ;;
+    *)
+      echo "Usage: $0 [force branch (develop|master)]" ;;
+  esac
+fi
+
+echo "Build infrastructure package"
+#TODO do it in services Makefile and remove this see bellow
+DOCKER_REGISTRY=docker.io
+DOCKER_NS=gomeetexamples
+
+OLD_PWD=$(pwd)
+
+SCRIPT=$(readlink -f "$0")
+SCRIPTPATH=$(dirname "$SCRIPT")
+. $SCRIPTPATH/gomeet-common
+
+$SCRIPTPATH/gomeet-fetch-all
+
+SRCPATH=$GOPATH/src/$GOGS_NAME/$GOGS_ORG
+RLIST=$SCRIPTPATH/../gomeet-services
+
+if [ ! -d "$SRCPATH" ]; then
+  echo "\$SRCPATH not found it will be created" >&2
+  mkdir -p $SRCPATH
+fi
+
+MYSQL_USER=gomeet
+MYSQL_PASSWORD=totogomeet
+MYSQL_SVC_POFILE_DATABASE=gomeet_svc_device
+
+BASE_TEMPLATE=$(readlink -f "$SCRIPTPATH/../templates")
+BASE_PKG_DIR="$SCRIPTPATH/../_build/packaged"
+mkdir -p $BASE_PKG_DIR
+BASE_PKG_DIR=$(readlink -f "$SCRIPTPATH/../_build/packaged")
+
+# 1. Check if all repositories are clean and exist
+HAS_ERR=0
+cat $RLIST | while read line
+do
+  svc=$(echo $line | tr -s " ")
+  s_name=$(echo "$svc" | cut -d " " -f1)
+  s_version=$(echo "$svc" | cut -d " " -f2)
+  [ $s_version = $s_name ] && s_version="master"
+
+  if startswith "$s_name" "$GOMEET_SVC_PREFIX"; then
+    echo "Check $s_name service"
+    if [ -d "$SRCPATH/$s_name" ]; then
+      cd $SRCPATH/$s_name
+      echo "$s_name repository exist"
+      git_changed_count=$(git status --porcelain | wc -l)
+      if [ "$git_changed_count" != "0" ]; then
+        HAS_ERR=1
+        echo "Error: $SRCPATH/$s_name repository has uncommited files"
+      fi
+      cd $OLD_PWD
+    else
+      HAS_ERR=1
+      echo "Error: $SRCPATH/$s_name repository doesn't exist"
+    fi
+  fi
+done
+if [ "$HAS_ERR" = "1" ]; then
+  echo "some errors occurred : fix this"
+  exit 1
+fi
+
+COMPOSE_ENV_CONTENT=""
+# 2. fetch on tag, build docker and push to registry
+cat $RLIST | {
+  while read line
+  do
+    svc=$(echo $line | tr -s " ")
+    if startswith "$svc" "#" ; then
+      echo "Ignore comment: $svc"
+      continue
+    fi
+    s_name=$(echo "$svc" | cut -d " " -f1)
+    s_version=$(echo "$svc" | cut -d " " -f2)
+    [ "$s_version" = "$s_name" ] && s_version="master"
+
+    if [ ! -z "$FORCE_BRANCH" ]; then
+      case "$FORCE_BRANCH" in
+        "master"|"develop")
+          s_version="$FORCE_BRANCH" ;;
+        *)
+          echo "Error: $FORCE_BRANCH invalid git flow branch (<tags>|develop|master)]"
+          exit 1
+          ;;
+      esac
+    fi
+
+    if startswith "$s_name" "$GOMEET_SVC_PREFIX"; then
+      echo "Build $s_name service"
+      if [ -d "$SRCPATH/$s_name" ]; then
+        cd $SRCPATH/$s_name
+        echo "$s_name repository exist checkout $s_version"
+        # Check if git is clean
+        git_changed_count=$(git status --porcelain | wc -l)
+        if [ "$git_changed_count" != "0" ]; then
+          echo "Error: $SRCPATH/$s_name repository has uncommited files"
+          exit 1
+        fi
+        BUILD_BRANCH_NAME="infra/build-$s_version"
+        # $GOMEET_MAKE tools
+        case $s_version in
+          "master")
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            DOCKER_BASE_PKG_DIR="$BASE_PKG_DIR/latest"
+            git checkout master -b $BUILD_BRANCH_NAME
+            $GOMEET_MAKE docker
+            GOMEET_DOCKER_REGISTRY=$DOCKER_REGISTRY $GOMEET_MAKE docker-push
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            docker tag gomeet/$s_name:$s_docker_tag $DOCKER_REGISTRY/$DOCKER_NS/$s_name:latest
+            docker push $DOCKER_REGISTRY/$DOCKER_NS/$s_name:latest
+            git reset --hard
+            git clean -fd
+            git checkout $s_version
+            git branch -d $BUILD_BRANCH_NAME
+            ;;
+          "develop")
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            DOCKER_BASE_PKG_DIR="$BASE_PKG_DIR/develop"
+            git checkout develop -b $BUILD_BRANCH_NAME
+            $GOMEET_MAKE docker
+            GOMEET_DOCKER_REGISTRY=$DOCKER_REGISTRY $GOMEET_MAKE docker-push
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            docker tag gomeet/$s_name:$s_docker_tag $DOCKER_REGISTRY/$DOCKER_NS/$s_name:develop
+            docker push $DOCKER_REGISTRY/$DOCKER_NS/$s_name:develop
+            git reset --hard
+            git clean -fd
+            git checkout $s_version
+            git branch -d $BUILD_BRANCH_NAME
+            ;;
+          *)
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            DOCKER_BASE_PKG_DIR="$BASE_PKG_DIR/current"
+            git checkout tags/v$s_version -b $BUILD_BRANCH_NAME
+            $GOMEET_MAKE docker
+            GOMEET_DOCKER_REGISTRY=$DOCKER_REGISTRY $GOMEET_MAKE docker-push
+            s_real_version=$(cat VERSION)
+            s_docker_tag=$(echo $s_real_version | tr +- __)
+            git reset --hard
+            git clean -fd
+            git checkout master
+            git branch -d $BUILD_BRANCH_NAME
+            ;;
+        esac
+
+        #TODO generate infra/docker-compose/.env file
+
+        compose_name=$(echo $s_name | tr "-" "_" | tr "[:lower:]" "[:upper:]" | sed 's/GOMEET_//g' )
+        COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nTAG_$compose_name=$s_docker_tag"
+        cd $OLD_PWD
+
+      else
+        echo "Error: $SRCPATH/$s_name repository doesn't exist"
+        exit 1
+      fi
+    fi
+  done
+  COMPOSE_DIST="$DOCKER_BASE_PKG_DIR/docker-compose"
+  mkdir -p $COMPOSE_DIST
+  COMPOSE_INFRA="alertmanager config.monitoring docker-compose grafana prometheus"
+  for f in $COMPOSE_INFRA; do
+    cp -r $BASE_TEMPLATE/$f $COMPOSE_DIST/$f
+  done
+  COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nMYSQL_USER=$MYSQL_USER"
+  COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nMYSQL_PASSWORD=$MYSQL_PASSWORD"
+  COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nMYSQL_SVC_PROFILE_DATABASE=$MYSQL_SVC_PROFILE_DATABASE"
+  COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nGOMEET_NS=$DOCKER_REGISTRY/$DOCKER_NS"
+  COMPOSE_ENV_CONTENT="$COMPOSE_ENV_CONTENT\nJWT_SECRET=$(openssl rand -base64 32)"
+  echo $COMPOSE_ENV_CONTENT > $COMPOSE_DIST/docker-compose/.env
+  cd $DOCKER_BASE_PKG_DIR
+  tar czvf docker-compose.tgz ./docker-compose
+  rm -rf ./docker-compose
+
+  cd $SCRIPTPATH/..
+  #git add _build
+  #case "$FORCE_BRANCH" in
+  #  "master"|"develop")
+  #    git commit -m "Added $FORCE_BRANCH docker-compose package"
+  #    ;;
+  #  *)
+  #    git commit -m "Added current docker-compose package"
+  #    ;;
+  #esac
+  #git push
+}

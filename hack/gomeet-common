@@ -1,0 +1,24 @@
+[ -z "$GOMEET_MAKE" ] && GOMEET_MAKE=make # make | gmake
+[ -z "$GOMEET_GOGS_TRANSPORT" ] && GOMEET_GOGS_TRANSPORT="https" # https | ssh
+
+GOGS_NAME=github.com
+GOGS_HTTP_SERVER=https://$GOGS_NAME
+GOGS_GIT_SERVER=$GOGS_HTTP_SERVER
+[ "$GOMEET_GOGS_TRANSPORT" = "ssh" ] && GOGS_GIT_SERVER="ssh://git@$GOGS_NAME"
+#[ "$GOMEET_GOGS_TRANSPORT" = "ssh" ] && GOGS_GIT_SERVER="ssh://gogs@$GOGS_NAME:10022"
+GOGS_API=$GOGS_HTTP_SERVER/api/v1
+GOGS_ORG=gomeet-examples
+GOMEET_SVC_PREFIX=svc-
+#GOMEET_SVC_PREFIX=gomeet-svc-
+GOMEET_SVC_PREFIX_SHORT=svc-
+
+CHECK_GNU_MAKE=$($GOMEET_MAKE -v 2>/dev/null | head -n1 | grep "GNU Make")
+if [ -z "$CHECK_GNU_MAKE" ]; then
+  echo "$GOMEET_MAKE isn't GNU Make, install it and set GOMEET_MAKE variable"
+  echo ""
+  exit 1
+fi
+
+startswith() { case $1 in "$2"*) true;; *) false;; esac }
+endswith() { case $1 in *"$2") true;; *) false;; esac }
+
